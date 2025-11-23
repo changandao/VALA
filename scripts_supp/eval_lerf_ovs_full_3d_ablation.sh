@@ -1,0 +1,2 @@
+sh scripts_supp/run_lerf_3d_ablation.sh
+sh scripts_supp/eval_lerf_ovs_3d_ablation.sh

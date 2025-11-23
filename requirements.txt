@@ -1,0 +1,12 @@
+open-clip-torch
+plyfile
+tqdm
+opencv-python<4.10.0.84
+tensorboard
+jaxtyping
+matplotlib
+typing
+pathlib
+mediapy
+scikit-learn
+numpy<2.0

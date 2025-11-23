@@ -1,0 +1,5 @@
+./output
+./logs
+./results
+./dataset
+./dataset/*
