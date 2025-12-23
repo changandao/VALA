@@ -40,17 +40,18 @@ def extract_gaussian_features(model_path, iteration, source_path, views, gaussia
 
         render_pkg= render(view, gaussians, pipeline, background)
 
-        if "waldo_kitchen" in model_path or "figurines" in model_path:
-            language_feature_dir = f"{source_path}/language_features"
-        else:
-            language_feature_dir = f"{source_path}/langsplat/language_features"
-        if omniseg3d:
-            ##lerf_ovs
-            # gt_language_feature, gt_mask = view.get_vfm_language_feature(language_feature_dir=f"{source_path}/omniseg3d/language_features_ins", feature_level=feature_level)
-            gt_language_feature, gt_mask = view.get_scannet_language_feature(language_feature_dir=language_feature_dir, feature_level=feature_level)
-        else:
-            ##scannet
-            gt_language_feature, gt_mask = view.get_language_feature(language_feature_dir=f"{source_path}/{ablation_type}/language_features_noise", feature_level=feature_level)
+        # if "waldo_kitchen" in model_path or "figurines" in model_path:
+        #     language_feature_dir = f"{source_path}/language_features"
+        # else:
+        #     language_feature_dir = f"{source_path}/langsplat/language_features"
+        # if omniseg3d:
+        #     ##lerf_ovs
+        #     # gt_language_feature, gt_mask = view.get_vfm_language_feature(language_feature_dir=f"{source_path}/omniseg3d/language_features_ins", feature_level=feature_level)
+        #     gt_language_feature, gt_mask = view.get_scannet_language_feature(language_feature_dir=language_feature_dir, feature_level=feature_level)
+        # else:
+        #     ##scannet
+        #     gt_language_feature, gt_mask = view.get_language_feature(language_feature_dir=f"{source_path}/{ablation_type}/language_features_noise", feature_level=feature_level)
+        gt_language_feature, gt_mask = view.get_language_feature(language_feature_dir=f"{source_path}/langsplat/language_features", feature_level=feature_level)
         
         activated = render_pkg["info"]["activated"]
         significance = render_pkg["info"]["significance"]
@@ -80,57 +81,6 @@ def extract_gaussian_features(model_path, iteration, source_path, views, gaussia
     torch.save((gaussians.capture_language_feature(), 0), language_feature_save_path)
     print("checkpoint saved to: ", language_feature_save_path)
     
-    
-def extract_gaussian_features_robust(model_path, iteration, source_path, views, gaussians, pipeline, background, feature_level, weight_threshold=1e-5):
-    """
-    Extract Gaussian features using robust Weiszfeld geometric median aggregation
-    Uses GaussianModel's built-in robust accumulation methods
-    
-    Args:
-        model_path: path to save the model
-        iteration: iteration number
-        source_path: source path for language features
-        views: list of camera views 
-        gaussians: GaussianModel instance
-        pipeline: pipeline parameters
-        background: background color
-        feature_level: feature level to extract
-        weight_threshold: minimum weight threshold for filtering low-weight features
-    """
-    
-    language_feature_save_path = os.path.join(model_path, f'chkpnt{iteration}_langfeat_{feature_level}_robust.pth')
-    
-    print("Collecting features from all views...")
-    for _, view in enumerate(tqdm(views, desc="Robust feature collection")):
-        render_pkg = render(view, gaussians, pipeline, background)
-
-        gt_language_feature, gt_mask = view.get_language_feature(
-            language_feature_dir=f"{source_path}/language_features", 
-            feature_level=feature_level
-        )
-        
-        activated = render_pkg["info"]["activated"]
-        significance = render_pkg["info"]["significance"]
-        means2D = render_pkg["info"]["means2d"]
-        
-        mask = activated[0] > 0
-        
-        # Use GaussianModel's robust accumulation method
-        gaussians.accumulate_gaussian_feature_per_view_robust(
-            gt_language_feature.permute(1, 2, 0), 
-            gt_mask.squeeze(0), 
-            mask, 
-            significance[0, mask], 
-            means2D[0, mask]
-        )
-        
-    # Finalize features using robust geometric median
-    gaussians.finalize_gaussian_features_robust(weight_threshold=weight_threshold)
-
-    # Ensure parent directory exists before saving
-    os.makedirs(os.path.dirname(language_feature_save_path), exist_ok=True)
-    torch.save((gaussians.capture_language_feature(), 0), language_feature_save_path)
-    print(f"Robust checkpoint saved to: {language_feature_save_path}")
 
 
 def extract_gaussian_features_stochastic(model_path, iteration, source_path, views, gaussians, pipeline, background, feature_level, weight_threshold=1e-5, omniseg3d=False, batch_size=50000, ablation_type="none"):
@@ -168,13 +118,9 @@ def extract_gaussian_features_stochastic(model_path, iteration, source_path, vie
         mask = activated[0] > 0
 
         # Use GaussianModel's robust accumulation method
-        if "teatime" in model_path: 
-            tau_mass = 0.5
-            tau_abs = 0.1
-        elif "scannet" in model_path:
+        if "scannet" in model_path:
             tau_mass = 0.9
             tau_abs = 0.01
-            k_max = 0.5*mask.shape[0]
         else:
             tau_mass = 0.75
             tau_abs = 0.13
@@ -214,7 +160,6 @@ def process_scene_language_features(dataset : ModelParams, opt : OptimizationPar
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         extract_gaussian_features(args.model_path, iteration, dataset.source_path, scene.getTrainCameras(), gaussians, pipeline, background, feature_level, args.omniseg3d, args.ablation_type)
-        # extract_gaussian_features_omniseg3d(args.model_path, iteration, dataset.source_path, scene.getTrainCameras(), gaussians, pipeline, background, feature_level
 
 
 def process_scene_language_features_stochastic(dataset : ModelParams, opt : OptimizationParams, iteration : int, pipeline : PipelineParams, feature_level : int, weight_threshold : float = 1e-5, omniseg3d : bool = False, batch_size : int = 50000, ablation_type : str = "none"):
@@ -239,9 +184,7 @@ def process_scene_language_features_stochastic(dataset : ModelParams, opt : Opti
         gaussians.restore_rgb(model_params, opt)
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-        
-        
-
+    
         extract_gaussian_features_stochastic(args.model_path, iteration, dataset.source_path, scene.getTrainCameras(), gaussians, pipeline, background, feature_level, weight_threshold, omniseg3d, batch_size, ablation_type)
 
 
@@ -265,10 +208,7 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    if args.use_robust:
-        print("Using robust Weiszfeld geometric median aggregation...")
-        process_scene_language_features_robust(model.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.feature_level, args.weight_threshold)
-    elif args.use_efficient:
+    if args.use_efficient:
         print("Using memory-efficient stochastic Weiszfeld algorithm...")
         process_scene_language_features_stochastic(model.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.feature_level, args.weight_threshold, args.omniseg3d, args.batch_size, args.ablation_type)
     else:

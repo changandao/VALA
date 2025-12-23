@@ -1,7 +1,12 @@
 import json
 import os
+import glob
+from collections import defaultdict
+from pathlib import Path
+from typing import Dict, Union, Any
 import numpy as np
 from PIL import Image
+from eval.utils import polygon_to_mask, stack_mask, vis_mask_save
 from argparse import ArgumentParser
 
 def load_image_as_binary(image_path, is_png=False, threshold=10):
@@ -19,14 +24,64 @@ def calculate_iou(mask1, mask2):
         return 0
     return intersection / union
 
-def evalute(gt_base, pred_base, output_dir=None, eval_args=None):
+def eval_gt_lerfdata(json_folder: Union[str, Path] = None, ouput_path: Path = None) -> Dict:
+    """
+    organise lerf's gt annotations
+    gt format:
+        file name: frame_xxxxx.json
+        file content: labelme format
+    return:
+        gt_ann: dict()
+            keys: str(int(idx))
+            values: dict()
+                keys: str(label)
+                values: dict() which contain 'bboxes' and 'mask'
+    """
+    gt_json_paths = sorted(glob.glob(os.path.join(str(json_folder), 'frame_*.json')))
+    print("gt_json_paths:", gt_json_paths)
+    img_paths = sorted(glob.glob(os.path.join(str(json_folder), 'frame_*.jpg')))
+    gt_ann = {}
+    for js_path in gt_json_paths:
+        img_ann = defaultdict(dict)
+        with open(js_path, 'r') as f:
+            gt_data = json.load(f)
+        
+        h, w = gt_data['info']['height'], gt_data['info']['width']
+        idx = int(gt_data['info']['name'].split('_')[-1].split('.jpg')[0]) - 1 
+        for prompt_data in gt_data["objects"]:
+            label = prompt_data['category']
+            box = np.asarray(prompt_data['bbox']).reshape(-1)           # x1y1x2y2
+            mask = polygon_to_mask((h, w), prompt_data['segmentation'])
+            if img_ann[label].get('mask', None) is not None:
+                mask = stack_mask(img_ann[label]['mask'], mask)
+                img_ann[label]['bboxes'] = np.concatenate(
+                    [img_ann[label]['bboxes'].reshape(-1, 4), box.reshape(-1, 4)], axis=0)
+            else:
+                img_ann[label]['bboxes'] = box
+            img_ann[label]['mask'] = mask
+            
+            # # save for visulsization
+            save_path = ouput_path / gt_data['info']['name'].split('.jpg')[0] / f'{label}.jpg'
+            save_path.parent.mkdir(exist_ok=True, parents=True)
+            print("save_path:", save_path)
+            vis_mask_save(mask, save_path)
+        gt_ann[f'{idx}'] = img_ann
+
+    return gt_ann, (h, w), img_paths
+
+def evalute(gt_base, pred_base, output_dir=None, eval_args=None,):
     scene_name = eval_args["scene_name"]
     iteration = eval_args["iteration"]
     mask_thresh = eval_args["mask_thresh"]
+    json_dir = eval_args["json_dir"]
     
+
+    print("pred_base:", pred_base)
     # gt_base = os.path.join(gt_base, scene_name, 'gt')
     # pred_base = os.path.join(pred_base, scene_name, 'predictions_mask_' + str(mask_thresh))
     
+    if json_dir is not None:
+        gt_ann, (h, w), img_paths = eval_gt_lerfdata(Path(os.path.join(json_dir, scene_name)), Path(gt_base))
     
     scene_gt_frames = {
         "waldo_kitchen": ["frame_00053", "frame_00066", "frame_00089", "frame_00140", "frame_00154"],
@@ -93,10 +148,12 @@ if __name__ == "__main__":
     parser.add_argument("--scene_name", type=str, choices=["waldo_kitchen", "ramen", "figurines", "teatime"],
                         help="Specify the scene_name from: figurines, teatime, ramen, waldo_kitchen")
     parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--json_dir", type=str, default=None)
     parser.add_argument("--gt_dir", type=str, required=True)
     parser.add_argument("--pred_dir", type=str, default=None)
     parser.add_argument("--iteration", type=int, default=30000)
     parser.add_argument("--mask_thresh", type=float, default=0.4)
+    parser.add_argument("--ablation_type", type=str, default="none")
     args = parser.parse_args()
     # if not args.scene_name:
     #     parser.error("The --scene_name argument is required and must be one of: waldo_kitchen, ramen, figurines, teatime")
@@ -105,17 +162,19 @@ if __name__ == "__main__":
     path_gt = args.gt_dir
     path_pred = args.pred_dir
     path_output = args.output_dir
+
     
     if args.scene_name:
         path_gt = os.path.join(args.gt_dir, args.scene_name, 'gt')
         # renders_cluster_silhouette is the predicted mask
-        path_pred = os.path.join(args.pred_dir, args.scene_name, 'predictions')
+        path_pred = os.path.join(args.pred_dir, args.scene_name, args.ablation_type, 'predictions_mask_' + str(args.mask_thresh))
+        path_output = os.path.join(args.output_dir, args.scene_name, args.ablation_type, 'predictions_mask_' + str(args.mask_thresh))
         # path_pred = args.eval_dir
         eval_args = {
             "scene_name": args.scene_name,
             "iteration": args.iteration,
             "mask_thresh": args.mask_thresh,
-            
+            "json_dir": args.json_dir,
         }
         single_scene_metrics = evalute(path_gt, path_pred, path_output, eval_args)
         all_scene_metrics = {
@@ -133,13 +192,13 @@ if __name__ == "__main__":
         for scene_name in lerf_ovs_scenes:
             print(f"Processing scene: {scene_name}")
             path_gt = os.path.join(args.gt_dir, scene_name, 'gt')
-            path_pred = os.path.join(args.pred_dir, scene_name, 'predictions_mask_' + str(args.mask_thresh))
-            path_output = os.path.join(args.output_dir, scene_name, 'predictions_mask_' + str(args.mask_thresh))
+            path_pred = os.path.join(args.pred_dir, scene_name, args.ablation_type, 'predictions_mask_' + str(args.mask_thresh))
+            path_output = os.path.join(args.output_dir, scene_name, args.ablation_type, 'predictions_mask_' + str(args.mask_thresh))
             eval_args = {
                 "scene_name": scene_name,
                 "iteration": args.iteration,
                 "mask_thresh": args.mask_thresh,
-                
+                "json_dir": args.json_dir,
             }
             single_scene_metrics = evalute(path_gt, path_pred, path_output, eval_args)
             all_scene_metrics[scene_name] = single_scene_metrics

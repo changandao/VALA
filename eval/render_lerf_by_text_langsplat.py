@@ -5,6 +5,15 @@ import random
 import torch
 import torchvision
 
+import glob
+from collections import defaultdict
+from pathlib import Path
+from typing import Dict, Union, Any
+import json
+import numpy as np
+from PIL import Image
+from eval.utils import polygon_to_mask, stack_mask, vis_mask_save
+
 from argparse import ArgumentParser
 from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
@@ -45,6 +54,51 @@ scene_texts = {
             'bag of cookies'] # 'dall-e brand' is not in the dataset
 }
 
+
+def eval_gt_lerfdata(json_folder: Union[str, Path] = None, ouput_path: Path = None) -> Dict:
+    """
+    organise lerf's gt annotations
+    gt format:
+        file name: frame_xxxxx.json
+        file content: labelme format
+    return:
+        gt_ann: dict()
+            keys: str(int(idx))
+            values: dict()
+                keys: str(label)
+                values: dict() which contain 'bboxes' and 'mask'
+    """
+    gt_json_paths = sorted(glob.glob(os.path.join(str(json_folder), 'frame_*.json')))
+    print("gt_json_paths:", gt_json_paths)
+    img_paths = sorted(glob.glob(os.path.join(str(json_folder), 'frame_*.jpg')))
+    gt_ann = {}
+    for js_path in gt_json_paths:
+        img_ann = defaultdict(dict)
+        with open(js_path, 'r') as f:
+            gt_data = json.load(f)
+        
+        h, w = gt_data['info']['height'], gt_data['info']['width']
+        idx = int(gt_data['info']['name'].split('_')[-1].split('.jpg')[0]) - 1 
+        for prompt_data in gt_data["objects"]:
+            label = prompt_data['category']
+            box = np.asarray(prompt_data['bbox']).reshape(-1)           # x1y1x2y2
+            mask = polygon_to_mask((h, w), prompt_data['segmentation'])
+            if img_ann[label].get('mask', None) is not None:
+                mask = stack_mask(img_ann[label]['mask'], mask)
+                img_ann[label]['bboxes'] = np.concatenate(
+                    [img_ann[label]['bboxes'].reshape(-1, 4), box.reshape(-1, 4)], axis=0)
+            else:
+                img_ann[label]['bboxes'] = box
+            img_ann[label]['mask'] = mask
+            
+            # # save for visulsization
+            save_path = ouput_path / gt_data['info']['name'].split('.jpg')[0] / f'{label}.jpg'
+            save_path.parent.mkdir(exist_ok=True, parents=True)
+            print("save_path:", save_path)
+            vis_mask_save(mask, save_path)
+        gt_ann[f'{idx}'] = img_ann
+
+    return gt_ann, (h, w), img_paths
 
 def activate_stream(gs_lang_feat, clip_model, gs_xyz, k=10, thresh=0.4):
     valid_map_3d = clip_model.get_max_across_3d(gs_lang_feat)
@@ -87,6 +141,7 @@ def render_set(output_dir, views, gaussians, pipeline, background, scene_name, t
     # start_time = time.time()
     count = 0
     for i, text_idx in enumerate(text_indices):
+        # print(f"gs_masks_pred[i]: {gs_masks_pred[i]}")
         opt = SimpleNamespace(include_feature=False, mask=gs_masks_pred[i])
         
         print(f"rendering the {text_idx+1}-th query of {len(target_text)} texts: {target_text[text_idx]}")
@@ -101,8 +156,6 @@ def render_set(output_dir, views, gaussians, pipeline, background, scene_name, t
 
             rendering = output["render"]
             rendering_alpha = output["render_alpha"]
-            # print(rendering.shape)
-            # print(rendering_alpha.shape)
             
             # Reshape rendering_alpha to [C, H, W] format
             if rendering_alpha.dim() == 4:  # If shape is [1, H, W, 1]
@@ -123,9 +176,6 @@ def evaluate(gaussians, model=None, clip_model=None, thresh=0.4, num_knn=10, dev
     
     # load language feature field on 3DGS and restore to 512
     gs_lang_feat = gaussians.get_language_feature() ##(N, 512)
-    # if gs_lang_feat.shape[1] == 3 and model is not None:  # low dim
-    #     with torch.no_grad():       
-    #         gs_lang_feat = model.decode(gs_lang_feat)
     
     valid_map_3d = clip_model.get_max_across_3d(gs_lang_feat)
     n_prompt, n = valid_map_3d.shape
@@ -153,14 +203,15 @@ def evaluate(gaussians, model=None, clip_model=None, thresh=0.4, num_knn=10, dev
         
         gs_masks_pred[i] = output > thresh
         scores[i] = relv_map_smoothed[i].max()
-        # scores[i] = output.max()
     
     del gs_lang_feat
     return scores, gs_masks_pred > 0.5
     
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, training_args : OptimizationParams, skip_train : bool, skip_test : bool,
-                ae_ckpt_path: str, encoder_hidden_dims: list, decoder_hidden_dims: list, scene_name: str, dataset_name: str, output_dir: str, mask_thresh: float, ablation_type="none", device="cuda"):
+                ae_ckpt_path: str, encoder_hidden_dims: list, decoder_hidden_dims: list, scene_name: str, dataset_name: str, output_dir: str, mask_thresh: float, ablation_type="none", json_dir=None, device="cuda"):
+    # if json_dir is not None:
+    #     gt_ann, (h, w), img_paths = eval_gt_lerfdata(Path(os.path.join(json_dir, scene_name)), Path(gt_base))
     with torch.no_grad():
         # load AutoEncoder
         # checkpoint = torch.load(ae_ckpt_path, map_location=device)
@@ -215,115 +266,14 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
                 checkpoint = os.path.join(model_path, f'chkpnt30000_langfeat_{i}_stochastic_gate.pth')
                 (model_params, first_iter) = torch.load(checkpoint)
                 gaussians.restore_language_features(model_params, training_args)
+
+                print("length of the test cameras:", len(scene.getTestCameras()))
         
                 if not skip_train:
                     n_queries = render_set(model_path, scene.getTrainCameras(), gaussians, pipeline, background, scene_name, level_wise_texts[f"{i}"], level_wise_gs_mask_preds[f"{i}"], mask_thresh, i)
                 if not skip_test:
                     n_queries = render_set(model_path,scene.getTestCameras(), gaussians, pipeline, background, scene_name, level_wise_texts[f"{i}"], level_wise_gs_mask_preds[f"{i}"], mask_thresh, i)
     return n_queries
-
-
-# def evaluate(gaussians, clip_model, thresh=0.4, num_knn=10, device="cuda", indices=None):
-#     # 1) 准备数据
-#     gs_lang_feat = gaussians.get_language_feature()          # (N, 512)
-#     valid_map_3d = clip_model.get_max_across_3d(gs_lang_feat) # (n_prompt, N)
-#     n_prompt, n = valid_map_3d.shape
-
-#     # 2) 邻接（可外部传进来复用）
-#     # if indices is None:
-#     #     gs_xyz_np = gaussians._xyz.detach().cpu().numpy()
-#     #     nbrs = NearestNeighbors(n_neighbors=num_knn).fit(gs_xyz_np)
-#     #     _, idx_np = nbrs.kneighbors(gs_xyz_np)
-#     #     indices = torch.from_numpy(idx_np).to(valid_map_3d.device)
-
-#     k = max(1, min(num_knn, n))
-#     if (indices is None) or (indices.shape[0] != n) or (indices.shape[1] != k):
-#         gs_xyz_np = gaussians._xyz.detach().cpu().numpy()
-#         from sklearn.neighbors import NearestNeighbors
-#         nbrs = NearestNeighbors(n_neighbors=k).fit(gs_xyz_np)
-#         _, idx_np = nbrs.kneighbors(gs_xyz_np)
-#         indices = torch.from_numpy(idx_np).to(valid_map_3d.device)
-        
-#     # 3) 结果容器（注意 dtype / device）
-#     relv_map_smoothed = torch.empty_like(valid_map_3d)
-#     gs_masks_pred = torch.empty_like(valid_map_3d, dtype=torch.bool)
-#     scores = torch.empty(n_prompt, device=valid_map_3d.device)
-
-#     # 4) 对每个 prompt 计算
-#     for i in range(n_prompt):
-#         relv_1d = valid_map_3d[i]                  # (N,)
-#         neighbors_avg = relv_1d[indices].mean(dim=1)
-#         smoothed = 0.5 * (relv_1d + neighbors_avg) # (N,)
-
-#         # —— 标准化到 [0,1] —— 
-#         m, M = smoothed.min(), smoothed.max()
-#         norm = (smoothed - m) / (M - m + 1e-9)
-
-#         # mask & score
-#         gs_masks_pred[i] = norm > thresh
-#         scores[i] = norm.max()  # 或 norm.topk(max(1, int(0.01*n))).values.mean()
-
-#     del gs_lang_feat
-#     return scores, gs_masks_pred, indices
-
-
-# def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, training_args : OptimizationParams, skip_train : bool, skip_test : bool,
-#                 ae_ckpt_path: str, encoder_hidden_dims: list, decoder_hidden_dims: list, scene_name: str, dataset_name: str, output_dir: str, mask_thresh: float, ablation_type="none", device="cuda"):
-#     with torch.no_grad():
-#         background = torch.tensor([1,1,1], dtype=torch.float32, device=device)
-
-#         clip_model = OpenCLIPNetwork(device)
-#         target_text = scene_texts[scene_name]
-#         clip_model.set_positives(target_text)
-
-#         scores_per_level = []
-#         masks_per_level = []
-#         indices_shared = None
-
-#         model_path = os.path.join(dataset.model_path, ablation_type)
-
-#         # 先对三层都评估一遍
-#         for lvl in (1, 2, 3):
-#             gaussians = GaussianModel(dataset.sh_degree)
-#             scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, include_feature=True)
-#             ckpt = os.path.join(model_path, f'chkpnt30000_langfeat_{lvl}_stochastic_quantile015.pth')
-#             (model_params, _) = torch.load(ckpt, map_location=device)
-#             gaussians.restore_language_features(model_params, training_args)
-
-#             sc, msk, indices_shared = evaluate(
-#                 gaussians, clip_model, thresh=mask_thresh, num_knn=10, device=device, indices=indices_shared
-#             )
-#             scores_per_level.append(sc)         # (n_prompt,)
-#             masks_per_level.append(msk)         # (n_prompt, N)
-
-#         # 逐 prompt 选 level
-#         score_stack = torch.stack(scores_per_level, dim=0)    # (3, n_prompt)
-#         chosen_levels = torch.argmax(score_stack, dim=0)       # (n_prompt,)
-
-#         level_wise_texts = {1: [], 2: [], 3: []}
-#         level_wise_masks = {1: [], 2: [], 3: []}
-
-#         for t_idx, lvl_idx in enumerate(chosen_levels.tolist()):
-#             key = lvl_idx + 1  # 1..3
-#             level_wise_texts[key].append(t_idx)
-#             level_wise_masks[key].append(masks_per_level[lvl_idx][t_idx].cpu())  # 如需 CPU
-
-#         total_queries = 0
-#         for lvl in (1, 2, 3):
-#             if level_wise_texts[lvl]:
-#                 gaussians = GaussianModel(dataset.sh_degree)
-#                 scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, include_feature=True)
-#                 ckpt = os.path.join(model_path, f'chkpnt30000_langfeat_{lvl}_stochastic_quantile015.pth')
-#                 (model_params, _) = torch.load(ckpt, map_location=device)
-#                 gaussians.restore_language_features(model_params, training_args)
-
-#                 if not skip_train:
-#                     total_queries += render_set(model_path, scene.getTrainCameras(), gaussians, pipeline, background,
-#                                                 scene_name, level_wise_texts[lvl], level_wise_masks[lvl], mask_thresh, lvl)
-#                 if not skip_test:
-#                     total_queries += render_set(model_path, scene.getTestCameras(), gaussians, pipeline, background,
-#                                                 scene_name, level_wise_texts[lvl], level_wise_masks[lvl], mask_thresh, lvl)
-#         return total_queries
 
 
 if __name__ == "__main__":
@@ -354,6 +304,7 @@ if __name__ == "__main__":
     parser.add_argument("--base_dir", type=str, required=False)
     parser.add_argument("--output_dir", type=str, required=False)
     parser.add_argument("--ablation_type", type=str, default="none")
+    parser.add_argument("--json_dir", type=str, default=None)
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
@@ -371,7 +322,7 @@ if __name__ == "__main__":
     # ae_ckpt_path = "output/3dgs/lerf_ovs/teatime/chkpnt30000_lanfeat_1.pth"
 
     start_time = time.time()
-    count = render_sets(model.extract(args), args.iteration, pipeline.extract(args), training_args.extract(args), args.skip_train, args.skip_test, ae_ckpt_path, args.encoder_dims, args.decoder_dims, args.scene_name, args.dataset_name, args.output_dir, args.mask_thresh, args.ablation_type)
+    count = render_sets(model.extract(args), args.iteration, pipeline.extract(args), training_args.extract(args), args.skip_train, args.skip_test, ae_ckpt_path, args.encoder_dims, args.decoder_dims, args.scene_name, args.dataset_name, args.output_dir, args.mask_thresh, args.ablation_type, args.json_dir)
     # count = render_sets_omniseg3d(model.extract(args), args.iteration, pipeline.extract(args), training_args.extract(args), args.skip_train, args.skip_test, ae_ckpt_path, args.encoder_dims, args.decoder_dims, args.scene_name, args.dataset_name, args.output_dir, args.mask_thresh, args.ablation_type)
     end_time = time.time()
     print(f"Time taken for rendering: {end_time - start_time} seconds")

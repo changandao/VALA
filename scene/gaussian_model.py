@@ -9,14 +9,12 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-# from regex import F
 import torch
 import numpy as np
 import torch.nn.functional as F
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
 import os
-import json
 from utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import RGB2SH
@@ -229,34 +227,33 @@ class GaussianModel:
 
     def get_covariance_inverse_from_gaussian_model(self, scaling_modifier=1.0):
         """
-        从GaussianModel获取协方差矩阵的逆
+        Get the inverse of covariance matrices from GaussianModel
         
         Args:
-            gaussian_model: GaussianModel实例
-            scaling_modifier: 缩放修正因子
+            scaling_modifier: Scaling correction factor
         
         Returns:
-            Sigma_inv: (N, 3, 3) 协方差矩阵的逆
+            Sigma_inv: (N, 3, 3) Inverse of covariance matrices
         """
-        # 1. 获取6维紧凑表示的协方差矩阵
+        # 1. Get 6D compact representation of covariance matrices
         cov_6d = self.get_covariance(scaling_modifier)  # (N, 6)
         
-        # 2. 将6维表示转换为完整的3x3协方差矩阵
+        # 2. Convert 6D representation to full 3x3 covariance matrices
         N = cov_6d.shape[0]
         Sigma = torch.zeros((N, 3, 3), device=cov_6d.device, dtype=cov_6d.dtype)
         
-        # 根据strip_lowerdiag的格式填充3x3矩阵
-        Sigma[:, 0, 0] = cov_6d[:, 0]  # (0,0)
-        Sigma[:, 0, 1] = cov_6d[:, 1]  # (0,1)
-        Sigma[:, 0, 2] = cov_6d[:, 2]  # (0,2)
-        Sigma[:, 1, 0] = cov_6d[:, 1]  # (1,0) = (0,1) 对称
-        Sigma[:, 1, 1] = cov_6d[:, 3]  # (1,1)
-        Sigma[:, 1, 2] = cov_6d[:, 4]  # (1,2)
-        Sigma[:, 2, 0] = cov_6d[:, 2]  # (2,0) = (0,2) 对称
-        Sigma[:, 2, 1] = cov_6d[:, 4]  # (2,1) = (1,2) 对称
-        Sigma[:, 2, 2] = cov_6d[:, 5]  # (2,2)
+        # Fill 3x3 matrix according to strip_lowerdiag format (symmetric)
+        Sigma[:, 0, 0] = cov_6d[:, 0]
+        Sigma[:, 0, 1] = cov_6d[:, 1]
+        Sigma[:, 0, 2] = cov_6d[:, 2]
+        Sigma[:, 1, 0] = cov_6d[:, 1]  # symmetric
+        Sigma[:, 1, 1] = cov_6d[:, 3]
+        Sigma[:, 1, 2] = cov_6d[:, 4]
+        Sigma[:, 2, 0] = cov_6d[:, 2]  # symmetric
+        Sigma[:, 2, 1] = cov_6d[:, 4]  # symmetric
+        Sigma[:, 2, 2] = cov_6d[:, 5]
         
-        # 3. 计算逆矩阵
+        # 3. Compute inverse matrices
         Sigma_inv = torch.linalg.inv(Sigma)  # (N, 3, 3)
         
         return Sigma_inv.cpu().detach().numpy()
@@ -603,7 +600,22 @@ class GaussianModel:
                                             tau_abs=0.03,
                                             k_max=10000,
                                             k_target=15):
-    
+        """
+        Accumulate language features per view with adaptive gating.
+        
+        Args:
+            gt_language_feature: Ground truth language features
+            gt_mask: Valid mask for ground truth features
+            mask: Visibility mask for Gaussians
+            significance: Importance weights for each Gaussian
+            means2D: 2D projections of Gaussian centers
+            feature_dim: Dimension of language features
+            ablation_type: Type of ablation study
+            tau_mass: Mass coverage threshold (0.90-0.95)
+            tau_abs: Absolute floor threshold (0.02-0.05)
+            k_max: Maximum number of Gaussians to keep (4-8)
+            k_target: Target average number of Gaussians to keep (1.5-2.5)
+        """
         if not hasattr(self, "_language_feature"):
             self.create_language_features(feature_dim=feature_dim)
             self._activated_views = torch.zeros((self._xyz.shape[0]), device="cuda")
@@ -611,60 +623,49 @@ class GaussianModel:
         batch_y = torch.clamp(means2D[:, 1], max=gt_language_feature.shape[0] - 1)
         batch_x = torch.clamp(means2D[:, 0], max=gt_language_feature.shape[1] - 1)
         gt_batch_features = gt_language_feature[batch_y.long(), batch_x.long()]
-        valid = gt_mask[batch_y.long(), batch_x.long()] # (N,)
+        valid = gt_mask[batch_y.long(), batch_x.long()]  # (N,)
         
-        valid = gt_mask[batch_y.long(), batch_x.long()] #& mask
         total_points = significance.numel()
-        # total_points = int(total_points)
-        # # 使用自适应门控替代硬编码阈值
-        # # 参数可以根据需要调整：
-        # # tau_mass: 质量覆盖阈值 (建议 0.90-0.95)
-        # # tau_abs: 绝对地板阈值 (建议 0.02-0.05) 
-        # # k_max: 最大保留高斯数 (建议 4-8)
-        # # k_target: 目标平均保留高斯数 (建议 1.5-2.5)
+        
+        # Apply adaptive gating
         w_mask_adaptive = self.adaptive_gating(
             significance, 
-            lambda_val=None,   # 手动设定较小的lambda值
-            tau_mass=tau_mass,    # 质量覆盖85% (更宽松)
-            tau_abs=tau_abs,    # 绝对地板0.5% (非常宽松) ##best case 0.13
-            k_max=0.15*total_points,         # 最多保留30个高斯
-            k_target=15     # 目标平均15个高斯  # no use
+            lambda_val=None,
+            tau_mass=tau_mass,
+            tau_abs=tau_abs,
+            k_max=0.15 * total_points,
+            k_target=15
         ).view(-1, 1)
-        
-        # print(f"w_mask_adaptive: {w_mask_adaptive.sum().item()}")
-        # 也提供一个基于分位数的简单自适应方法作为对比
-        # 动态调整分位数：如果点太少就降低分位数
         
         w_mask_mass = self._mass_coverage_gating(significance, 0.35)
         
-        # print(f"w_mask_mass: {w_mask_mass.sum().item()}")
-        
+        # Dynamically adjust quantile threshold based on point count
         if total_points > 100:
-            quantile_threshold = 0.85  # 保留top 15%
+            quantile_threshold = 0.85  # Keep top 15%
         elif total_points > 50:
-            quantile_threshold = 0.80  # 保留top 20%
+            quantile_threshold = 0.80  # Keep top 20%
         else:
-            quantile_threshold = 0.70  # 保留top 30%
+            quantile_threshold = 0.70  # Keep top 30%
             
         w_mask_quantile_adaptive = significance.view(-1, 1) > significance.quantile(quantile_threshold)
         
-        
-        # 比较不同方法的效果
+        # Compare different gating methods and select the more permissive one
         w_mask_hard = significance.view(-1, 1) > 0.10
         w_mask_quantile = significance.view(-1, 1) > significance.quantile(0.85)
         if w_mask_hard.sum() > w_mask_quantile.sum():
             w_final_mask = w_mask_hard
         else:
             w_final_mask = w_mask_quantile
-        # w_mask_mass = w_mask_hard.squeeze() & w_mask_mass.squeeze() & w_mask_quantile_adaptive.squeeze()
-        
-        # print(f"Total points: {significance.numel()}")
-        # print(f"Adaptive gating count: {w_mask_adaptive.sum().item()}")
-        # print(f"mass coverage gate: {w_mask_mass.sum().item()}")
-        # print(f"Quantile adaptive count: {w_mask_quantile_adaptive.sum().item()}")
-        # print(f"Hard threshold count: {w_mask_hard.sum().item()}")  
-        # print(f"Fixed quantile count: {w_mask_quantile.sum().item()}")
+
         valid = valid & w_final_mask.squeeze()
+
+        # l1 distance
+        # diff      = f_t - g_t
+        # dist      = diff.norm(dim=1, keepdim=True).clamp_min(1e-4)      # stable
+        
+        # W_t_new   = W_t_prev + w_t
+        # step      = w_t / W_t_new                                       # η_t = w_t / W_t
+        # update    = step * diff / dist                                  # only multiply once w_t/W_t
         
         if not hasattr(self, "_language_feature_weight"):
             self._language_feature_weight = torch.zeros((self._xyz.shape[0], 1), device="cuda")
@@ -685,15 +686,10 @@ class GaussianModel:
         )
 
     def finalize_gaussian_features(self):
+        """Finalize language features by normalizing and pruning inactive Gaussians."""
         self._language_feature = self._language_feature / (self._language_feature_weight + 1e-15)
         
-        # # Instead of pruning, mark non-activated Gaussians as invalid with -1 features
-        # invalid_mask = self._activated_views == 0
-        # if invalid_mask.any():
-        #     self._language_feature[invalid_mask] = -1
-        
-        # print("Marked {} points as invalid (-1) instead of pruning".format(invalid_mask.sum()))
-        # Filtering
+        # Filter out Gaussians that were never activated
         prune_mask = self._activated_views == 0
         self.prune_points(prune_mask)
         self._language_feature = self._language_feature[~prune_mask]
@@ -706,53 +702,36 @@ class GaussianModel:
     
     def _mass_coverage_gating(self, significance, tau_mass=0.95):
         """
-        质量覆盖门控
+        Mass coverage gating.
         
-        根据权重的累积分布，保留权重总和达到tau_mass比例的高斯
+        Keep Gaussians whose cumulative weight sum reaches tau_mass proportion.
         
         Args:
-            significance: 权重张量 (N,)
-            tau_mass: 质量覆盖阈值 (0.90-0.95)
+            significance: Weight tensor (N,)
+            tau_mass: Mass coverage threshold (0.90-0.95)
             
         Returns:
-            s_mass: 质量覆盖门控掩码 (N,) bool tensor
+            s_mass: Mass coverage gating mask (N,) bool tensor
         """
         if significance.numel() == 0:
             return torch.zeros_like(significance, dtype=torch.bool)
             
-        # 按权重降序排序
+        # Sort weights in descending order
         sorted_weights, sorted_indices = torch.sort(significance, descending=True)
         cumsum_weights = torch.cumsum(sorted_weights, dim=0)
         total_weight = significance.sum()
         
         if total_weight > 0:
-            # 找到累积权重达到tau_mass的最小索引
+            # Find the minimum index where cumulative weight reaches tau_mass
             mass_threshold_idx = torch.where(cumsum_weights >= tau_mass * total_weight)[0]
             if len(mass_threshold_idx) > 0:
-                mass_cutoff = mass_threshold_idx[0] + 1  # +1因为索引从0开始
+                mass_cutoff = mass_threshold_idx[0] + 1  # +1 because index starts from 0
                 s_mass = torch.zeros_like(significance, dtype=torch.bool)
                 s_mass[sorted_indices[:mass_cutoff]] = True
             else:
                 s_mass = torch.ones_like(significance, dtype=torch.bool)
         else:
             s_mass = torch.zeros_like(significance, dtype=torch.bool)
-            
-        # 输出对应的 significance 值，便于调试/观察
-        try:
-            selected_significance = significance[s_mass]
-            print("[MassCoverage] selected count:", int(s_mass.sum().item()))
-            # 仅打印统计信息，避免日志过长
-            if selected_significance.numel() > 0:
-                ss = selected_significance.detach()
-                if ss.is_cuda:
-                    ss = ss.cpu()
-                print(
-                    "[MassCoverage] significance stats -> min: {:.6f}, max: {:.6f}, mean: {:.6f}".format(
-                        float(ss.min().item()), float(ss.max().item()), float(ss.mean().item())
-                    )
-                )
-        except Exception:
-            pass
 
         return s_mass
 
@@ -763,18 +742,18 @@ class GaussianModel:
                        k_max=6,
                        k_target=2.0):
         """
-        自适应门控机制
+        Adaptive gating mechanism.
         
         Args:
-            significance: 权重张量 (N,) 
-            lambda_val: 射线相对阈值参数，如果为None则自动确定
-            tau_mass: 质量覆盖阈值 (0.90-0.95)
-            tau_abs: 绝对地板阈值 (0.02-0.05)
-            k_max: 最大保留高斯数量 (4-8)
-            k_target: 目标平均保留高斯数 (1.5-2.5)
+            significance: Weight tensor (N,) 
+            lambda_val: Ray relative threshold parameter, auto-determined if None
+            tau_mass: Mass coverage threshold (0.90-0.95)
+            tau_abs: Absolute floor threshold (0.02-0.05)
+            k_max: Maximum number of Gaussians to keep (4-8)
+            k_target: Target average number of Gaussians to keep (1.5-2.5)
             
         Returns:
-            mask: 门控掩码 (N,) bool tensor
+            mask: Gating mask (N,) bool tensor
         """
         if not isinstance(k_max, int):
             k_max = int(k_max)
@@ -784,27 +763,24 @@ class GaussianModel:
         if significance.numel() == 0:
             return torch.zeros_like(significance, dtype=torch.bool)
         
-        # 2. 质量覆盖门控
+        # Apply mass coverage gating
         s_mass = self._mass_coverage_gating(significance, tau_mass)
             
-        # 3. 绝对地板过滤
+        # Apply absolute floor filter
         abs_filter = significance >= tau_abs
         
-        # 4. 组合门控：(S_rel ∪ S_mass) ∩ {i: w_i ≥ τ_abs}
-        # combined_mask = (s_rel | s_mass) & abs_filter
+        # Combined gating: S_mass ∩ {i: w_i ≥ τ_abs}
         combined_mask = s_mass & abs_filter
         
-        # 5. 应用上限约束
+        # Apply upper limit constraint
         if combined_mask.sum() > k_max:
-            # 保留权重最大的k_max个
+            # Keep only the top k_max by weight
             _, top_indices = torch.topk(significance, k_max)
             final_mask = torch.zeros_like(significance, dtype=torch.bool)
             final_mask[top_indices] = True
             combined_mask = combined_mask & final_mask
-            print(f"selected points: k_max: {final_mask.sum().item()}")
-        # print(f"Combined mask: {combined_mask.sum().item()}")
             
-        # 6. 确保至少保留一个（权重最大的）
+        # Ensure at least one Gaussian is kept (the one with maximum weight)
         if combined_mask.sum() == 0:
             max_idx = significance.argmax()
             combined_mask[max_idx] = True
@@ -818,18 +794,18 @@ class GaussianModel:
                        k_max=6,
                        k_target=2.0):
         """
-        自适应门控机制
+        Adaptive gating mechanism for ablation study.
         
         Args:
-            significance: 权重张量 (N,) 
-            lambda_val: 射线相对阈值参数，如果为None则自动确定
-            tau_mass: 质量覆盖阈值 (0.90-0.95)
-            tau_abs: 绝对地板阈值 (0.02-0.05)
-            k_max: 最大保留高斯数量 (4-8)
-            k_target: 目标平均保留高斯数 (1.5-2.5)
+            significance: Weight tensor (N,) 
+            lambda_val: Ray relative threshold parameter, auto-determined if None
+            tau_mass: Mass coverage threshold (0.90-0.95)
+            tau_abs: Absolute floor threshold (0.02-0.05)
+            k_max: Maximum number of Gaussians to keep (4-8)
+            k_target: Target average number of Gaussians to keep (1.5-2.5)
             
         Returns:
-            mask: 门控掩码 (N,) bool tensor
+            mask: Gating mask (N,) bool tensor
         """
         if not isinstance(k_max, int):
             k_max = int(k_max)
@@ -839,31 +815,22 @@ class GaussianModel:
         if significance.numel() == 0:
             return torch.zeros_like(significance, dtype=torch.bool)
         
-        # 2. 质量覆盖门控
+        # Apply mass coverage gating
         s_mass = self._mass_coverage_gating(significance, tau_mass)
             
-        # 3. 绝对地板过滤
+        # Apply absolute floor filter
         abs_filter = significance >= tau_abs
         
-        # 4. 组合门控：(S_rel ∪ S_mass) ∩ {i: w_i ≥ τ_abs}
-        # combined_mask = (s_rel | s_mass) & abs_filter
+        # Combined gating: S_mass ∩ {i: w_i ≥ τ_abs}
         combined_mask = s_mass & abs_filter
         
+        # Always apply top-k constraint in ablation mode
         _, top_indices = torch.topk(significance, k_max, dim=0)
         final_mask = torch.zeros_like(significance, dtype=torch.bool)
         final_mask[top_indices] = True
         combined_mask = combined_mask & final_mask
-        # 5. 应用上限约束
-        # if combined_mask.sum() < k_max:
-        #     # 保留权重最大的k_max个
-        #     _, top_indices = torch.topk(significance, k_max)
-        #     final_mask = torch.zeros_like(significance, dtype=torch.bool)
-        #     final_mask[top_indices] = True
-        #     combined_mask = combined_mask & final_mask
-        #     print(f"selected points: k_max: {final_mask.sum().item()}")
-        # print(f"Combined mask: {combined_mask.sum().item()}")
             
-        # 6. 确保至少保留一个（权重最大的）
+        # Ensure at least one Gaussian is kept (the one with maximum weight)
         if combined_mask.sum() == 0:
             max_idx = significance.argmax()
             combined_mask[max_idx] = True
@@ -873,41 +840,41 @@ class GaussianModel:
     def _adaptive_lambda_search(self, significance, k_target, tau_abs, k_max, 
                                lambda_min=0.0, lambda_max=0.8, tolerance=0.5):
         """
-        自适应确定lambda参数
-        使用二分搜索找到使平均保留高斯数接近k_target的lambda值
+        Adaptively determine lambda parameter.
+        Uses binary search to find lambda value that keeps average Gaussian count close to k_target.
         """
         def count_selected_gaussians(lamb):
             w_max = significance.max()
             if w_max <= 0:
-                return 1  # 至少保留一个
+                return 1  # Keep at least one
                 
-            # 只计算相对阈值部分，不考虑质量覆盖（质量覆盖在主函数中处理）
+            # Only compute relative threshold, mass coverage is handled in main function
             s_rel = significance >= (lamb * w_max)
             abs_filter = significance >= tau_abs
             mask = s_rel & abs_filter
             
-            # 应用上限
+            # Apply upper limit
             count = min(mask.sum().item(), k_max)
-            return max(count, 1)  # 至少保留一个
+            return max(count, 1)  # Keep at least one
             
-        # 先检查边界情况
+        # Check boundary conditions first
         count_min = count_selected_gaussians(lambda_min)
         count_max = count_selected_gaussians(lambda_max)
         
-        # 如果最小lambda的结果仍然小于目标，直接返回最小值
+        # If min lambda result is still below target, return min value
         if count_min <= k_target:
             return lambda_min
             
-        # 如果最大lambda的结果仍然大于目标，直接返回最大值  
+        # If max lambda result is still above target, return max value
         if count_max >= k_target:
             return lambda_max
             
-        # 二分搜索
+        # Binary search
         left, right = lambda_min, lambda_max
         best_lambda = left
         best_diff = float('inf')
         
-        for _ in range(15):  # 减少迭代次数
+        for _ in range(15):  # Limit iterations
             mid = (left + right) / 2
             count = count_selected_gaussians(mid)
             diff = abs(count - k_target)
@@ -936,110 +903,77 @@ class GaussianModel:
                                                 tau_abs=0.1,
                                                 k_max=10000,
                                                 feature_dim=512):
-
+        """
+        Accumulate language features per view using robust geometric median estimation.
+        
+        Args:
+            gt_language_feature: Ground truth language features from CLIP
+            gt_mask: Valid mask for ground truth features
+            mask: Visibility mask for Gaussians
+            significance: Importance weights for each Gaussian
+            means2D: 2D projections of Gaussian centers
+            tau_mass: Mass coverage threshold
+            tau_abs: Absolute floor threshold
+            k_max: Maximum number of Gaussians to keep
+            feature_dim: Dimension of language features
+        """
         if not hasattr(self, "_language_feature_robust"):
             self.create_language_features_robust(feature_dim)
             self._activated_views_robust = torch.zeros(self._xyz.shape[0], device="cuda")
 
-        # 1. 取像素 CLIP 向量
+        # Get pixel CLIP vectors
         y = torch.clamp(means2D[:, 1], max=gt_language_feature.shape[0]-1).long()
         x = torch.clamp(means2D[:, 0], max=gt_language_feature.shape[1]-1).long()
-        f_t = F.normalize(gt_language_feature[y, x], dim=-1)            # ← 归一化
-        valid = gt_mask[y, x] #& mask                               # 双重过滤
-        if valid.sum() == 0: return
-        
+        f_t = F.normalize(gt_language_feature[y, x], dim=-1)  # Normalize
+        valid = gt_mask[y, x]
+        if valid.sum() == 0:
+            return
         
         total_points = significance.numel()
-        # total_points = int(total_points)
        
-        # w_mask_adaptive = self.adaptive_gating(
-        #     significance, 
-        #     lambda_val=None,   # 手动设定较小的lambda值
-        #     tau_mass=tau_mass, #tau_mass,    # 质量覆盖85% (更宽松)
-        #     tau_abs=tau_abs,    # 绝对地板0.5% (非常宽松) ##best case 0.13
-        #     k_max=0.15*total_points,         # 
-        #     k_target=15     # 目标平均15个高斯  # no use
-        # ).view(-1, 1)
-        
-        w_mask_adaptive = self.adaptive_gating_ablation(
+        ### gating methods
+        w_mask_adaptive = self.adaptive_gating(
             significance, 
-            lambda_val=None,   # 手动设定较小的lambda值
-            tau_mass=tau_mass, #tau_mass,    # 质量覆盖85% (更宽松)
-            tau_abs=tau_abs,    # 绝对地板0.5% (非常宽松) ##best case 0.13
+            lambda_val=None,   # manually set smaller lambda value
+            tau_mass=tau_mass, #tau_mass,    
+            tau_abs=tau_abs,    # absolute floor 0.5% (very loose) ##best case 0.13
             k_max=0.5*total_points,         # 
-            k_target=15     # 目标平均15个高斯  # no use
+            k_target=15     # target average 15 gaussians  # no use
         ).view(-1, 1)
         
-        # print(f"w_mask_adaptive: {w_mask_adaptive.sum().item()}")
-        # 也提供一个基于分位数的简单自适应方法作为对比
-        # 动态调整分位数：如果点太少就降低分位数
+        # w_mask_mass = self._mass_coverage_gating(significance, 0.25)
         
-        w_mask_mass = self._mass_coverage_gating(significance, 0.25)
-        
-        # print(f"w_mask_mass: {w_mask_mass.sum().item()}")
-        
-        if total_points > 100:
-            quantile_threshold = 0.85  # 保留top 15%
-        elif total_points > 50:
-            quantile_threshold = 0.80  # 保留top 20%
-        else:
-            quantile_threshold = 0.70  # 保留top 30%
-            
-        w_mask_quantile_adaptive = significance.view(-1, 1) > significance.quantile(quantile_threshold)
-        
-        
-        # 比较不同方法的效果
-        w_mask_hard = significance.view(-1, 1) > 0.10
-        w_mask_quantile = significance.view(-1, 1) > significance.quantile(0.94)
+        # Compare different gating methods and select the more permissive one
+        w_mask_hard = significance.view(-1, 1) > 0.15
+        w_mask_quantile = significance.view(-1, 1) > significance.quantile(0.85)
         if w_mask_hard.sum() > w_mask_quantile.sum():
             w_final_mask = w_mask_hard
         else:
             w_final_mask = w_mask_quantile
-        # w_mask_mass = w_mask_hard.squeeze() & w_mask_mass.squeeze() & w_mask_quantile_adaptive.squeeze()
         
-        # print(f"Total points: {significance.numel()}")
-        # print(f"Adaptive gating count: {w_mask_adaptive.sum().item()}")
-        # print(f"mass coverage gate: {w_mask_mass.sum().item()}")
-        # print(f"Quantile adaptive count: {w_mask_quantile_adaptive.sum().item()}")
-        # print(f"Hard threshold count: {w_mask_hard.sum().item()}")  
-        # print(f"Fixed quantile count: {w_mask_quantile.sum().item()}")
-        # print("the w_mask_mass values is ", significance.quantile(0.94))
-        # 使用更宽松的自适应分位数方法
-        # w_mask_mass = w_mask_mass & w_mask_hard.squeeze()
-        # valid = valid & w_mask_mass
-        # valid = valid & w_mask_adaptive.squeeze()
-        # valid = valid & w_mask_quantile.squeeze()
-        # valid = valid & w_mask_quantile.squeeze()
-        # valid = valid & w_final_mask.squeeze()
-        ## for no gating
-        
+        w_mask_mass = w_mask_adaptive.squeeze() & w_final_mask.squeeze()
+
+        ### end of gating methods
+
+        ### apply gating mask
+        valid = valid & w_mask_mass.squeeze()
         f_t       = f_t[valid]
         w_t       = significance[valid].view(-1, 1)                     # (N_valid,1)
-        # w_mask    = (w_t > 0.03).squeeze()
-        # w_t       = w_t[w_mask]
-        # f_t       = f_t[w_mask]
-        # mask = mask[w_mask]
+
         idx       = torch.nonzero(mask, as_tuple=False).squeeze(1)[valid]
 
-        g_t       = self._language_feature_robust[idx]                  # 现估计
-        W_t_prev  = self._cumulative_weights_robust[idx]                # 累计权
+        g_t       = self._language_feature_robust[idx]                  # current estimate
+        W_t_prev  = self._cumulative_weights_robust[idx]                # cumulative weight
 
-        # l1 distance
-        # diff      = f_t - g_t
-        # dist      = diff.norm(dim=1, keepdim=True).clamp_min(1e-4)      # 稳定
-        
-        # W_t_new   = W_t_prev + w_t
-        # step      = w_t / W_t_new                                       # η_t = w_t / W_t
-        # update    = step * diff / dist                                  # ☆ 只乘一次 w_t/W_t
 
-        # # cos similarity
-        dot   = (f_t * g_t).sum(dim=-1, keepdim=True)           # (N,1)
-        W_t_new   = W_t_prev + w_t
-        step      = w_t / W_t_new                                       # η_t = w_t / W_t
+        # Cosine similarity based update
+        dot = (f_t * g_t).sum(dim=-1, keepdim=True)  # (N, 1)
+        W_t_new = W_t_prev + w_t
+        step = w_t / W_t_new  # η_t = w_t / W_t, step size
         g = f_t - dot * g_t
         update = step * g
 
-        # 写回
+        # Write back updated features
         self._language_feature_robust[idx] = F.normalize(g_t + update, dim=-1)
         self._cumulative_weights_robust[idx] = W_t_new
         self._activated_views_robust[idx] += 1
@@ -1055,7 +989,13 @@ class GaussianModel:
 
     
     def finalize_gaussian_features_robust(self, w_thr=1e-5):
-        # ---- 合并阈值策略 ----
+        """
+        Finalize robust language features by pruning low-weight Gaussians.
+        
+        Args:
+            w_thr: Weight threshold for pruning
+        """
+        # Combined threshold strategy
         abs_thr = max(w_thr,
                     0.01 * torch.median(self._cumulative_weights_robust).item())
 
@@ -1065,7 +1005,7 @@ class GaussianModel:
         print(f"[Robust] prune {prune.sum().item()} / {len(keep)} "
             f"(thr={abs_thr:.2e})")
 
-        # ---- 截断所有并行缓冲 ----
+        # Truncate all parallel buffers
         for name in ("_language_feature_robust",
                     "_cumulative_weights_robust",
                     "_activated_views_robust"):
@@ -1073,10 +1013,10 @@ class GaussianModel:
             if buf is not None:
                 setattr(self, name, buf[keep].clone())
 
-        # 最后让底层几何/加速结构同步更新
+        # Sync underlying geometry/acceleration structures
         self.prune_points(prune)
 
-        # 一次性再 normalize（保险）
+        # Final normalization for safety
         self._language_feature_robust = torch.nn.functional.normalize(
             self._language_feature_robust, dim=-1)
         # # Normalize only valid features, mark the rest as -1 instead of pruning
@@ -1142,11 +1082,7 @@ class GaussianModel:
             self.active_sh_degree,
             self._xyz,
             self._features_dc,
-            self._features_rest,
-            self._scaling,
-            self._rotation,
-            self._opacity,
-            self._labels,  # The semantic labels
+            self._cumulative_weights_robust,
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,

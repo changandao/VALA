@@ -1,5 +1,8 @@
-./output
-./logs
-./results
-./dataset
-./dataset/*
+output/
+logs/
+results/
+dataset/3dgs/
+ckpts/
+eval_ablation/
+eval_copy/
+# ./dataset/*

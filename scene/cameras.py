@@ -96,7 +96,7 @@ class Camera(nn.Module):
         
     def get_language_feature(self, language_feature_dir, feature_level):
         
-        language_feature_name = os.path.join(language_feature_dir, self.image_name.split('.')[0])
+        language_feature_name = os.path.join(language_feature_dir, self.image_name)
         
         seg_map = torch.from_numpy(np.load(language_feature_name + '_s.npy'))  # seg_map: torch.Size([4, 730, 988])
         feature_map = torch.from_numpy(np.load(language_feature_name + '_f.npy')) # feature_map: torch.Size([281, 512])
@@ -126,7 +126,7 @@ class Camera(nn.Module):
     
     def get_vfm_language_feature(self, language_feature_dir, feature_level):
         
-        language_feature_name = os.path.join(language_feature_dir, self.image_name.split('.')[0])
+        language_feature_name = os.path.join(language_feature_dir, self.image_name)
         # language_feature_name = self.language_feature_name
         # print("language_feature_dir: ", language_feature_name)
         # print("language_feature_dir: ", "/home/sen/projects/SuperGSeg/dataset/3dgs/lerf_ovs/teatime/language_features_dim3/frame_00099_s.npy")
@@ -156,7 +156,7 @@ class Camera(nn.Module):
         - Avoids creating large CPU tensors and host->device copies of large outputs
         """
 
-        language_feature_name = os.path.join(language_feature_dir, self.image_name.split('.')[0])
+        language_feature_name = os.path.join(language_feature_dir, self.image_name)
 
         seg_map_np = np.load(language_feature_name + '_s.npy')
         feature_map_np = np.load(language_feature_name + '_f.npy')
@@ -196,7 +196,7 @@ class ScanNetCamera(Camera):
         
     def get_vfm_language_feature(self, language_feature_dir, feature_level):
         
-        language_feature_name = os.path.join(language_feature_dir, self.image_name.split('.')[0])
+        language_feature_name = os.path.join(language_feature_dir, self.image_name)
         # language_feature_name = self.language_feature_name
         # print("language_feature_dir: ", language_feature_name)
         # print("language_feature_dir: ", "/home/sen/projects/SuperGSeg/dataset/3dgs/lerf_ovs/teatime/language_features_dim3/frame_00099_s.npy")

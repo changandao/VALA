@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
             
 def render_set(model_path, name, iteration, source_path, views, gaussians, pipeline, background, feature_level):
     
-    save_path = os.path.join(model_path, name, "ours_{}_langfeat_{}".format(iteration, feature_level))
+    save_path = os.path.join(model_path, name, "ours_{}_langfeat_{}_stochastic_gate".format(iteration, feature_level))
     render_path = os.path.join(save_path, "renders")
     gts_path = os.path.join(save_path, "gt")
     render_npy_path = os.path.join(save_path, "renders_npy")
@@ -42,7 +42,7 @@ def render_set(model_path, name, iteration, source_path, views, gaussians, pipel
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         render_pkg = render(view, gaussians, pipeline, background, include_feature=True)
         rendering = render_pkg["render"]
-        gt, mask = view.get_language_feature(language_feature_dir=f"{source_path}/language_features", feature_level=feature_level) #! modified
+        gt, mask = view.get_language_feature(language_feature_dir=f"{source_path}/langsplat/language_features", feature_level=feature_level) #! modified
         # gt, mask = view.get_scannet_language_feature(language_feature_dir=f"{source_path}/language_features_ins", feature_level=feature_level)
         # np.save(os.path.join(render_npy_path, view.image_name.split('.')[0] + ".npy"),rendering.permute(1,2,0).cpu().numpy())
         # np.save(os.path.join(gts_npy_path, view.image_name.split('.')[0] + ".npy"),gt.permute(1,2,0).cpu().numpy())
@@ -84,7 +84,7 @@ def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int
         
         model_path = os.path.join(args.model_path, ablation_type)
         if ablation_type == "none":
-            checkpoint = os.path.join(model_path, f'chkpnt{iteration}_langfeat_{feature_level}.pth')
+            checkpoint = os.path.join(model_path, f'chkpnt{iteration}_langfeat_{feature_level}_stochastic_gate.pth')
         else:
             checkpoint = os.path.join(model_path, f'chkpnt{iteration}_langfeat_{feature_level}_stochastic_w015_langsplat.pth')
         (model_params, first_iter) = torch.load(checkpoint)
