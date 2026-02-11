@@ -86,15 +86,21 @@ After running this, you will get the trained 3D Gasussian Splatting and the 3 le
 sh scripts/eval_lerf_ovs_3d.sh
 ```
 
+## Related Projects
+
+We also refer readers to our related project:
+
+- [SuperGSeg](https://github.com/supergseg/supergseg) — A complementary work on open-vocabulary 3D segmentation using Gaussian-based scene representations.
+
 ## Acknowledgements
 
 This project builds upon several excellent open-source works. We would like to express our sincere gratitude to the authors and contributors of:
 
 - [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting)
 - [gsplat](https://github.com/nerfstudio-project/gsplat)
+- [OccamLGS](https://github.com/insait-institute/OccamLGS)
 
 Their outstanding contributions to real-time radiance field rendering and efficient Gaussian splatting implementations have significantly supported this work.
-
 
 ## Citation
 
