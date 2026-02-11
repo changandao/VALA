@@ -1,3 +1,11 @@
+# Visibility-Aware Language Aggregation for Open-Vocabulary Segmentation in 3D Gaussian Splatting
+
+[![Project Page](https://img.shields.io/badge/Project-Website-blue)](https://vala3d.github.io/)
+[![Paper PDF](https://img.shields.io/badge/Paper-PDF-red)](https://arxiv.org/pdf/2509.05515)
+[![arXiv](https://img.shields.io/badge/arXiv-2509.05515-b31b1b.svg)](https://arxiv.org/abs/2509.05515)
+
+> Official implementation of **Visibility-Aware Language Aggregation (VALA)**.
+
 ## Inatallation
 
 First create the environment and install the required dependencies
@@ -77,6 +85,21 @@ After running this, you will get the trained 3D Gasussian Splatting and the 3 le
 ```
 sh scripts/eval_lerf_ovs_3d.sh
 ```
+
+## Citation
+
+If you find this work useful in your research, please consider citing:
+
+```bibtex
+@misc{wang2025vala,
+  title={Visibility-Aware Language Aggregation for Open-Vocabulary Segmentation in 3D Gaussian Splatting},
+  author={Sen Wang and Kunyi Li and Siyun Liang and Elena Alegret and Jing Ma and Nassir Navab and Stefano Gasperini},
+  year={2025},
+  eprint={2509.05515},
+  archivePrefix={arXiv},
+  primaryClass={cs.CV},
+  url={https://arxiv.org/abs/2509.05515}
+}
 
 
 
