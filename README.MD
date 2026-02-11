@@ -86,6 +86,16 @@ After running this, you will get the trained 3D Gasussian Splatting and the 3 le
 sh scripts/eval_lerf_ovs_3d.sh
 ```
 
+## Acknowledgements
+
+This project builds upon several excellent open-source works. We would like to express our sincere gratitude to the authors and contributors of:
+
+- [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting)
+- [gsplat](https://github.com/nerfstudio-project/gsplat)
+
+Their outstanding contributions to real-time radiance field rendering and efficient Gaussian splatting implementations have significantly supported this work.
+
+
 ## Citation
 
 If you find this work useful in your research, please consider citing:
