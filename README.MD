@@ -100,7 +100,7 @@ This project builds upon several excellent open-source works. We would like to e
 - [gsplat](https://github.com/nerfstudio-project/gsplat)
 - [OccamLGS](https://github.com/insait-institute/OccamLGS)
 
-Their outstanding contributions to real-time radiance field rendering and efficient Gaussian splatting implementations have significantly supported this work.
+Their outstanding contributions to efficient Gaussian splatting implementations have significantly supported this work.
 
 ## Citation
 
