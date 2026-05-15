@@ -6,7 +6,7 @@
 
 > Official implementation of **Visibility-Aware Language Aggregation (VALA)**.
 
-## Inatallation
+## Installation
 
 First create the environment and install the required dependencies
 
@@ -16,10 +16,15 @@ conda create -n vala python=3.10
 pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
 
 pip install -r requirements.txt
+```
+
+Then clone the submodules and install them:
+
+```
+git submodule update --init --recursive
 
 pip install -e ./submodules/gsplat
-pip install -e ./submodules/simple-knn
-
+pip install -e ./submodules/simple_knn
 ```
 
 ## Running the code 
