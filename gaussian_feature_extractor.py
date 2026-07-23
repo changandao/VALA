@@ -40,40 +40,14 @@ def extract_gaussian_features(model_path, iteration, source_path, views, gaussia
 
         render_pkg= render(view, gaussians, pipeline, background)
 
-        # if "waldo_kitchen" in model_path or "figurines" in model_path:
-        #     language_feature_dir = f"{source_path}/language_features"
-        # else:
-        #     language_feature_dir = f"{source_path}/langsplat/language_features"
-        # if omniseg3d:
-        #     ##lerf_ovs
-        #     # gt_language_feature, gt_mask = view.get_vfm_language_feature(language_feature_dir=f"{source_path}/omniseg3d/language_features_ins", feature_level=feature_level)
-        #     gt_language_feature, gt_mask = view.get_scannet_language_feature(language_feature_dir=language_feature_dir, feature_level=feature_level)
-        # else:
-        #     ##scannet
-        #     gt_language_feature, gt_mask = view.get_language_feature(language_feature_dir=f"{source_path}/{ablation_type}/language_features_noise", feature_level=feature_level)
         gt_language_feature, gt_mask = view.get_language_feature(language_feature_dir=f"{source_path}/langsplat/language_features", feature_level=feature_level)
-        
+
         activated = render_pkg["info"]["activated"]
         significance = render_pkg["info"]["significance"]
         means2D = render_pkg["info"]["means2d"]
-        
+
         mask = activated[0] > 0
         gaussians.accumulate_gaussian_feature_per_view(gt_language_feature.permute(1, 2, 0), gt_mask.squeeze(0), mask, significance[0,mask], means2D[0, mask])
-        
-        # # print('total gaussians ', mask.shape[0])
-        # # print(f'valid gaussians for view {view.image_name} ', means2D[0, mask].shape[0])
-        # # Use GaussianModel's robust accumulation method
-        # if "teatime" in model_path:
-        #     tau_mass = 0.5
-        #     tau_abs = 0.1
-        # elif "scannet" in model_path:
-        #     tau_mass = 0.5
-        #     tau_abs = 0.1
-        # #     k_max = 0.5*mask.shape[0]
-        # else:
-        #     tau_mass = 0.75
-        #     tau_abs = 0.13
-        # gaussians.accumulate_gaussian_feature_per_view_gate(gt_language_feature.permute(1, 2, 0), gt_mask.squeeze(0), mask, significance[0,mask], means2D[0, mask], tau_mass=tau_mass, tau_abs=tau_abs)
     gaussians.finalize_gaussian_features()
 
     # Ensure parent directory exists before saving
@@ -83,47 +57,42 @@ def extract_gaussian_features(model_path, iteration, source_path, views, gaussia
     
 
 
-def extract_gaussian_features_stochastic(model_path, iteration, source_path, views, gaussians, pipeline, background, feature_level, weight_threshold=1e-5, omniseg3d=False, batch_size=50000, ablation_type="none"):
+def extract_gaussian_features_stochastic(model_path, iteration, source_path, views, gaussians, pipeline, background, feature_level, weight_threshold=1e-5, omniseg3d=False, batch_size=50000, ablation_type="none", tau_mass=0.75, tau_abs=0.13):
     """
     Extract Gaussian features using memory-efficient stochastic Weiszfeld algorithm
     Processes Gaussians in batches to handle very large scenes (millions of Gaussians)
-    
+
     Args:
         model_path: path to save the model
         iteration: iteration number
         source_path: source path for language features
-        views: list of camera views 
+        views: list of camera views
         gaussians: GaussianModel instance
         pipeline: pipeline parameters
         background: background color
         feature_level: feature level to extract
         weight_threshold: minimum weight threshold for filtering low-weight features
         batch_size: batch size for processing Gaussian updates
+        tau_mass: mass threshold for the adaptive gate (0.9 for ScanNet, 0.75 otherwise)
+        tau_abs: absolute threshold for the adaptive gate (0.01 for ScanNet, 0.13 otherwise)
     """
     model_path = os.path.join(model_path, ablation_type)
-    
-    language_feature_save_path = os.path.join(model_path, f'chkpnt{iteration}_langfeat_{feature_level}_stochastic_gate.pth')      
 
-    print(f"Collecting features from all views using stochastic Weiszfeld (batch_size={batch_size})...")
-    
+    language_feature_save_path = os.path.join(model_path, f'chkpnt{iteration}_langfeat_{feature_level}_stochastic_gate.pth')
+
+    print(f"Collecting features from all views using stochastic Weiszfeld (batch_size={batch_size}, tau_mass={tau_mass}, tau_abs={tau_abs})...")
+
     for view_idx, view in enumerate(tqdm(views, desc="Stochastic feature collection")):
         render_pkg = render(view, gaussians, pipeline, background)
         language_feature_dir = f"{source_path}/langsplat/language_features"
-       
+
         gt_language_feature, gt_mask = view.get_language_feature(language_feature_dir=language_feature_dir, feature_level=feature_level)
-        
+
         activated = render_pkg["info"]["activated"]
         significance = render_pkg["info"]["significance"]
         means2D = render_pkg["info"]["means2d"]
         mask = activated[0] > 0
 
-        # Use GaussianModel's robust accumulation method
-        if "scannet" in model_path:
-            tau_mass = 0.9
-            tau_abs = 0.01
-        else:
-            tau_mass = 0.75
-            tau_abs = 0.13
         gaussians.accumulate_gaussian_feature_per_view_robust(
             gt_language_feature.permute(1, 2, 0), 
             gt_mask.squeeze(0), 
@@ -147,45 +116,47 @@ def extract_gaussian_features_stochastic(model_path, iteration, source_path, vie
     print(f"Stochastic checkpoint saved to: {language_feature_save_path}")
 
 
-def process_scene_language_features(dataset : ModelParams, opt : OptimizationParams, iteration : int, pipeline : PipelineParams, feature_level : int):
+def process_scene_language_features(dataset : ModelParams, opt : OptimizationParams, iteration : int, pipeline : PipelineParams, feature_level : int, omniseg3d : bool = False, ablation_type : str = "none"):
 
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, include_feature=True)
 
-        checkpoint = os.path.join(args.model_path, f'chkpnt{iteration}.pth')
+        checkpoint = os.path.join(dataset.model_path, f'chkpnt{iteration}.pth')
         (model_params, _) = torch.load(checkpoint)
         gaussians.restore_rgb(model_params, opt)
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-        extract_gaussian_features(args.model_path, iteration, dataset.source_path, scene.getTrainCameras(), gaussians, pipeline, background, feature_level, args.omniseg3d, args.ablation_type)
+        extract_gaussian_features(dataset.model_path, iteration, dataset.source_path, scene.getTrainCameras(), gaussians, pipeline, background, feature_level, omniseg3d, ablation_type)
 
 
-def process_scene_language_features_stochastic(dataset : ModelParams, opt : OptimizationParams, iteration : int, pipeline : PipelineParams, feature_level : int, weight_threshold : float = 1e-5, omniseg3d : bool = False, batch_size : int = 50000, ablation_type : str = "none"):
+def process_scene_language_features_stochastic(dataset : ModelParams, opt : OptimizationParams, iteration : int, pipeline : PipelineParams, feature_level : int, weight_threshold : float = 1e-5, omniseg3d : bool = False, batch_size : int = 50000, ablation_type : str = "none", tau_mass : float = 0.75, tau_abs : float = 0.13):
     """
     Process scene language features using memory-efficient stochastic Weiszfeld algorithm
-    
+
     Args:
         dataset: model parameters
-        opt: optimization parameters  
+        opt: optimization parameters
         iteration: iteration number
         pipeline: pipeline parameters
         feature_level: feature level to extract
         weight_threshold: minimum weight threshold for filtering low-weight features
         batch_size: batch size for processing Gaussian updates
+        tau_mass: mass threshold for the adaptive gate
+        tau_abs: absolute threshold for the adaptive gate
     """
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, include_feature=True)
 
-        checkpoint = os.path.join(args.model_path, f'chkpnt{iteration}.pth')
+        checkpoint = os.path.join(dataset.model_path, f'chkpnt{iteration}.pth')
         (model_params, _) = torch.load(checkpoint)
         gaussians.restore_rgb(model_params, opt)
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-    
-        extract_gaussian_features_stochastic(args.model_path, iteration, dataset.source_path, scene.getTrainCameras(), gaussians, pipeline, background, feature_level, weight_threshold, omniseg3d, batch_size, ablation_type)
+
+        extract_gaussian_features_stochastic(dataset.model_path, iteration, dataset.source_path, scene.getTrainCameras(), gaussians, pipeline, background, feature_level, weight_threshold, omniseg3d, batch_size, ablation_type, tau_mass, tau_abs)
 
 
 if __name__ == "__main__":
@@ -202,6 +173,8 @@ if __name__ == "__main__":
     parser.add_argument("--omniseg3d", action="store_true", help="Use omniseg3d language features")
     parser.add_argument("--batch_size", default=50000, type=int, help="Batch size for processing updates")
     parser.add_argument("--ablation_type", type=str, default="none", help="ablation type")
+    parser.add_argument("--tau_mass", default=0.75, type=float, help="Mass threshold of the adaptive gate (use 0.9 for ScanNet)")
+    parser.add_argument("--tau_abs", default=0.13, type=float, help="Absolute threshold of the adaptive gate (use 0.01 for ScanNet)")
 
     args = get_combined_args(parser)
 
@@ -210,7 +183,7 @@ if __name__ == "__main__":
 
     if args.use_efficient:
         print("Using memory-efficient stochastic Weiszfeld algorithm...")
-        process_scene_language_features_stochastic(model.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.feature_level, args.weight_threshold, args.omniseg3d, args.batch_size, args.ablation_type)
+        process_scene_language_features_stochastic(model.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.feature_level, args.weight_threshold, args.omniseg3d, args.batch_size, args.ablation_type, args.tau_mass, args.tau_abs)
     else:
         print("Using standard weighted average aggregation...")
-        process_scene_language_features(model.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.feature_level)
+        process_scene_language_features(model.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.feature_level, args.omniseg3d, args.ablation_type)

@@ -22,12 +22,11 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-# try:
-#     from torch.utils.tensorboard import SummaryWriter
-#     TENSORBOARD_FOUND = True
-# except ImportError:
-#     TENSORBOARD_FOUND = False
-TENSORBOARD_FOUND = False
+try:
+    from torch.utils.tensorboard import SummaryWriter
+    TENSORBOARD_FOUND = True
+except ImportError:
+    TENSORBOARD_FOUND = False
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
@@ -144,10 +143,10 @@ def prepare_output_and_logger(args):
 
     # Create Tensorboard writer
     tb_writer = None
-    # if TENSORBOARD_FOUND:
-    #     tb_writer = SummaryWriter(args.model_path)
-    # else:
-    #     print("Tensorboard not available: not logging progress")
+    if TENSORBOARD_FOUND:
+        tb_writer = SummaryWriter(args.model_path)
+    else:
+        print("Tensorboard not available: not logging progress")
     return tb_writer
 
 def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
