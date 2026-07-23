@@ -1,8 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Experiment outputs
 output/
 logs/
 results/
-dataset/3dgs/
 ckpts/
-eval_ablation/
-eval_copy/
-# ./dataset/*
+visualizations/
+
+# Data
+dataset/3dgs/

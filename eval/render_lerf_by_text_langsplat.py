@@ -318,7 +318,7 @@ if __name__ == "__main__":
     dataset_name = args.dataset_name
     mask_thresh = args.mask_thresh
 
-    ae_ckpt_path = os.path.join(args.ae_ckpt_dir, args.scene_name, "best_ckpt.pth")
+    ae_ckpt_path = os.path.join(args.ae_ckpt_dir, args.scene_name, "best_ckpt.pth") if args.ae_ckpt_dir else None
     # ae_ckpt_path = "output/3dgs/lerf_ovs/teatime/chkpnt30000_lanfeat_1.pth"
 
     start_time = time.time()
