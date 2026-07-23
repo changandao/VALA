@@ -514,7 +514,6 @@ def process_one_scene(sam_mask_generator: SamAutomaticMaskGenerator, scene: str,
     else:
         raise NotImplementedError(f"Dataset handling is not implemented yet for dataset {dataset_name}")
     # print(img_dir, image_path_list)
-    # print(os.path.join("/home/sen/projects/master-thesis/dataset/3dgs/mipnerf360/garden/images_4"))
     print(len(image_path_list))
     image_path_list = sorted(image_path_list)
     if str(dataset_name).lower() == "lerf_ovs":
@@ -820,12 +819,12 @@ if __name__ == '__main__':
     
     # arguments
     parser = ArgumentParser("Script to extract hierarchy masks and instance masks from the dataset")
-    parser.add_argument("--root_dir", type=str, default="/home/sen.wang/projects/VALA")
+    parser.add_argument("--root_dir", type=str, default=os.path.dirname(os.path.abspath(__file__)), help="project root directory")
     parser.add_argument("--dataset_name", type=str, choices=["replica", "lerf_ovs", "scannet", "scannet_langsplat", "scannet_panopli", "mipnerf360", "waymo"], default="lerf_ovs")
     parser.add_argument("--rep", type=str, choices=["3dgs"], default="3dgs")
     parser.add_argument("--scene", help="If none, preprocess the whole dataset", default=None)
     parser.add_argument("--sam_model", help="model of sam", default="vit_h")
-    parser.add_argument("--sam_checkpoint", help="checkpoint of sam", default="/home/sen.wang/projects/VALA/ckpts/sam_vit_h_4b8939.pth")
+    parser.add_argument("--sam_checkpoint", help="checkpoint of sam", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "ckpts", "sam_vit_h_4b8939.pth"))
     parser.add_argument("--get_semantic", help="whether to get CLIP semantic feature from mask", action='store_true', default=False)
     parser.add_argument("--use_langsplat", help="if true use langsplat sam that provides 4 levels of mask", action='store_true')
     parser.add_argument("--device", default="cuda")

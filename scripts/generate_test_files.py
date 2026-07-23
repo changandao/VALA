@@ -5,13 +5,12 @@ The content of each text.txt file contains the image names (without suffix)
 from the corresponding label directory.
 """
 
-import os
+import argparse
 from pathlib import Path
 
 
-def generate_text_files():
-    # Base paths
-    base_path = Path("/home/sen.wang/projects/VALA/dataset/3dgs/lerf_ovs")
+def generate_text_files(base_path):
+    base_path = Path(base_path)
     label_base_path = base_path / "label"
     
     # Scene names
@@ -51,6 +50,10 @@ def generate_text_files():
 
 
 if __name__ == "__main__":
-    generate_text_files()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base_path", default="dataset/3dgs/lerf_ovs",
+                        help="Path to the lerf_ovs dataset root (containing the scene folders and label/)")
+    args = parser.parse_args()
+    generate_text_files(args.base_path)
     print("Done!")
 

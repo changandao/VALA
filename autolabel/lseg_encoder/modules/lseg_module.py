@@ -99,7 +99,7 @@ class LSegModule(LSegmentationModule):
 
     def get_labels(self, dataset):
         labels = []
-        path = '/home/sen/projects/SuperGSeg/autolabel/lseg_encoder/label_files/ade20k_objectInfo150.txt'.format(dataset)
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'label_files', '{}_objectInfo150.txt'.format(dataset))
         assert os.path.exists(path), '*** Error : {} not exist !!!'.format(path)
         f = open(path, 'r') 
         lines = f.readlines()      
